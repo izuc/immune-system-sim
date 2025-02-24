@@ -15,39 +15,59 @@ const moveCell = (cell, dir, gridSize) => {
     };
 };
 
-const moveTowardBacteria = (cell, bacteria) => {
-    const nearest = bacteria.reduce((closest, b) => {
-        const dist = Math.abs(b.x - cell.x) + Math.abs(b.y - cell.y);
-        return dist < Math.abs(closest.x - cell.x) + Math.abs(closest.y - cell.y) ? b : closest;
-    }, bacteria[0]);
-    if (nearest.x > cell.x) return 'right';
-    if (nearest.x < cell.x) return 'left';
-    if (nearest.y > cell.y) return 'down';
-    return 'up';
+const getDirectionTo = (from, to, gridSize) => {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const absDx = Math.min(Math.abs(dx), gridSize.width - Math.abs(dx));
+    const absDy = Math.min(Math.abs(dy), gridSize.height - Math.abs(dy));
+    if (absDx > absDy) {
+        return dx > 0 ? 'right' : 'left';
+    } else {
+        return dy > 0 ? 'down' : 'up';
+    }
 };
 
-const getAwayFromImmuneCells = (bacteria, immuneCells) => {
-    const nearest = immuneCells.reduce((closest, cell) => {
-        const dist = Math.abs(cell.x - bacteria.x) + Math.abs(cell.y - bacteria.y);
-        return dist < Math.abs(closest.x - bacteria.x) + Math.abs(closest.y - bacteria.y) ? cell : closest;
-    }, immuneCells[0]);
-    if (nearest.x > bacteria.x) return 'left';
-    if (nearest.x < bacteria.x) return 'right';
-    if (nearest.y > bacteria.y) return 'up';
-    return 'down';
+const findNearest = (from, targets, gridSize) => {
+    if (targets.length === 0) return null;
+    return targets.reduce((near, target) => {
+        const distNear = Math.min(Math.abs(near.x - from.x), gridSize.width - Math.abs(near.x - from.x)) +
+                         Math.min(Math.abs(near.y - from.y), gridSize.height - Math.abs(near.y - from.y));
+        const distTarget = Math.min(Math.abs(target.x - from.x), gridSize.width - Math.abs(target.x - from.x)) +
+                           Math.min(Math.abs(target.y - from.y), gridSize.height - Math.abs(target.y - from.y));
+        return distTarget < distNear ? target : near;
+    }, targets[0]);
 };
 
-const spawnImmuneCell = (gridSize) => {
-    const types = ['macrophage', 'tcell', 'bcell'];
+const isImmuneCellNearby = (b, immuneCells, range, gridSize) => {
+    return immuneCells.some(cell => {
+        const dx = Math.min(Math.abs(cell.x - b.x), gridSize.width - Math.abs(cell.x - b.x));
+        const dy = Math.min(Math.abs(cell.y - b.y), gridSize.height - Math.abs(cell.y - b.y));
+        return dx + dy <= range;
+    });
+};
+
+const getAdjacentPositions = (pos, gridSize) => {
+    const directions = ['up', 'down', 'left', 'right'];
+    return directions.map(dir => moveCell(pos, dir, gridSize));
+};
+
+const isAdjacent = (pos1, pos2, gridSize) => {
+    const dx = Math.min(Math.abs(pos1.x - pos2.x), gridSize.width - Math.abs(pos1.x - pos2.x));
+    const dy = Math.min(Math.abs(pos1.y - pos2.y), gridSize.height - Math.abs(pos1.y - pos2.y));
+    return (dx === 1 && dy === 0) || (dx === 0 && dy === 1);
+};
+
+const spawnImmuneCell = (gridSize, type = null) => {
+    const types = type ? [type] : ['macrophage', 'tcell', 'bcell'];
     const colors = { macrophage: '#FF4500', tcell: '#00CED1', bcell: '#FFD700' };
-    const type = types[Math.floor(Math.random() * types.length)];
+    const chosenType = types[Math.floor(Math.random() * types.length)];
     return {
         id: Math.random().toString(36).substr(2, 9),
         x: Math.floor(Math.random() * gridSize.width),
         y: Math.floor(Math.random() * gridSize.height),
-        type,
+        type: chosenType,
         dir: randomDir(),
-        color: colors[type]
+        color: colors[chosenType]
     };
 };
 
@@ -62,7 +82,7 @@ const spawnBacteria = (gridSize) => ({
 const App = () => {
     const [gridSize] = useState({ width: 50, height: 50 });
     const [grid, setGrid] = useState(initializeGrid(gridSize));
-    const [immuneCells, setImmuneCells] = useState(initializeImmuneCells());
+    const [immuneCells, setImmuneCells] = useState(initializeImmuneCells(gridSize));
     const [bacteria, setBacteria] = useState([]);
     const [running, setRunning] = useState(false);
     const intervalRef = useRef(null);
@@ -77,18 +97,17 @@ const App = () => {
         return grid;
     }
 
-    function initializeImmuneCells() {
+    function initializeImmuneCells(size) {
         const positions = [];
         const cells = [
             { id: Math.random().toString(36).substr(2, 9), x: 20, y: 20, type: 'macrophage', dir: 'up', color: '#FF4500' },
             { id: Math.random().toString(36).substr(2, 9), x: 30, y: 30, type: 'tcell', dir: 'right', color: '#00CED1' },
             { id: Math.random().toString(36).substr(2, 9), x: 25, y: 25, type: 'bcell', dir: 'down', color: '#FFD700' }
         ];
-        // Ensure no initial overlap
         cells.forEach(cell => {
             while (positions.some(p => p.x === cell.x && p.y === cell.y)) {
-                cell.x = Math.floor(Math.random() * gridSize.width);
-                cell.y = Math.floor(Math.random() * gridSize.height);
+                cell.x = Math.floor(Math.random() * size.width);
+                cell.y = Math.floor(Math.random() * size.height);
             }
             positions.push({ x: cell.x, y: cell.y });
         });
@@ -96,202 +115,336 @@ const App = () => {
     }
 
     const updateSimulation = useCallback(() => {
-        const updateTissue = (grid) => {
-            const newGrid = grid.map(row => [...row]);
-            bacteria.forEach(b => {
-                if (newGrid[b.y][b.x] === '#E0E0E0') newGrid[b.y][b.x] = '#FF69B4';
-            });
-            return newGrid;
-        };
+        const newGrid = grid.map(row => [...row]);
 
-        const updateImmuneCells = (cells, grid, bacteria) => {
-            const occupiedPositions = new Set(cells.map(c => `${c.x},${c.y}`));
-            const infectionMemory = new Set();
+        // Current immune positions
+        const currentImmunePositions = new Set(immuneCells.map(c => `${c.x},${c.y}`));
 
-            const newCells = cells.map(cell => {
-                let newDir = bacteria.length > 0 ? moveTowardBacteria(cell, bacteria) : randomDir();
-                let newPos = moveCell(cell, newDir, gridSize);
-
-                while (occupiedPositions.has(`${newPos.x},${newPos.y}`) && newPos.x !== cell.x && newPos.y !== cell.y) {
-                    newDir = randomDir();
-                    newPos = moveCell(cell, newDir, gridSize);
+        // Move bacteria first, avoiding current immune positions
+        const newBacteriaPositions = new Set();
+        const newBacteria = bacteria.map(b => {
+            let dir;
+            const nearestImmune = findNearest(b, immuneCells, gridSize);
+            const distToImmune = nearestImmune ? Math.min(Math.abs(nearestImmune.x - b.x), gridSize.width - Math.abs(nearestImmune.x - b.x)) + Math.min(Math.abs(nearestImmune.y - b.y), gridSize.height - Math.abs(nearestImmune.y - b.y)) : Infinity;
+            if (distToImmune <= 2) {
+                const dx = nearestImmune.x - b.x;
+                const dy = nearestImmune.y - b.y;
+                if (Math.abs(dx) > Math.abs(dy)) {
+                    dir = dx > 0 ? 'left' : 'right';
+                } else {
+                    dir = dy > 0 ? 'up' : 'down';
                 }
-                occupiedPositions.delete(`${cell.x},${cell.y}`);
-                occupiedPositions.add(`${newPos.x},${newPos.y}`);
-
-                let newCell = { ...cell, x: newPos.x, y: newPos.y, dir: newDir };
-
-                switch (cell.type) {
-                    case 'macrophage': {
-                        const nearbyBacteria = bacteria.filter(b =>
-                            Math.abs(b.x - newCell.x) <= 2 &&
-                            Math.abs(b.y - newCell.y) <= 2
-                        );
-
-                        if (nearbyBacteria.length > 0) {
-                            const target = nearbyBacteria.find(b => b.marked) || nearbyBacteria[0];
-                            setBacteria(prev => prev.filter(b => b.id !== target.id));
-
-                            newCell.x = target.x;
-                            newCell.y = target.y;
-
-                            occupiedPositions.delete(`${newPos.x},${newPos.y}`);
-                            occupiedPositions.add(`${newCell.x},${newCell.y}`);
+            } else {
+                const healthyTissues = [];
+                for (let y = 0; y < gridSize.height; y++) {
+                    for (let x = 0; x < gridSize.width; x++) {
+                        if (grid[y][x] === '#E0E0E0') {
+                            healthyTissues.push({x, y});
                         }
-                        break;
                     }
-                    case 'tcell': {
-                        // Create a copy of the grid that we'll modify
-                        const newGrid = grid.map(row => [...row]);
-                        let gridChanged = false;
-
-                        // Heal infected tissue in a 2-cell radius
-                        for (let dy = -2; dy <= 2; dy++) {
-                            for (let dx = -2; dx <= 2; dx++) {
-                                const nx = (newCell.x + dx + gridSize.width) % gridSize.width;
-                                const ny = (newCell.y + dy + gridSize.height) % gridSize.height;
-                                if (newGrid[ny][nx] === '#FF69B4') {  // If infected tissue found
-                                    newGrid[ny][nx] = '#E0E0E0';  // Heal it back to healthy tissue
-                                    gridChanged = true;
-                                    infectionMemory.add(`${nx},${ny}`);
-
-                                    // Check for and remove any bacteria at this location
-                                    const bacteriaAtLocation = bacteria.find(b => b.x === nx && b.y === ny);
-                                    if (bacteriaAtLocation) {
-                                        setBacteria(prev => prev.filter(b => b.id !== bacteriaAtLocation.id));
-                                    }
-                                }
-                            }
-                        }
-
-                        // Only update the grid if changes were made
-                        if (gridChanged) {
-                            setGrid(newGrid);
-                        }
-                        break;
-                    }
-                    case 'bcell': {
-                        const markingRadius = 3;
-                        bacteria.forEach(b => {
-                            if (Math.abs(b.x - newCell.x) <= markingRadius &&
-                                Math.abs(b.y - newCell.y) <= markingRadius &&
-                                !b.marked) {
-                                b.marked = true;
-                                cells.forEach(c => {
-                                    if (c.type === 'macrophage' &&
-                                        Math.abs(c.x - b.x) <= 4 &&
-                                        Math.abs(c.y - b.y) <= 4) {
-                                        c.dir = moveTowardBacteria(c, [b]);
-                                    }
-                                });
-                            }
-                        });
-                        break;
-                    }
-                    default:
-                        break;
                 }
-                return newCell;
-            });
-
-            if (bacteria.length > 5 && Math.random() < 0.1) {
-                const newCell = spawnImmuneCell(gridSize);
-                if (!occupiedPositions.has(`${newCell.x},${newCell.y}`)) {
-                    newCells.push(newCell);
+                if (healthyTissues.length > 0) {
+                    dir = getDirectionTo(b, findNearest(b, healthyTissues, gridSize), gridSize);
+                } else {
+                    dir = randomDir();
                 }
             }
-            return newCells;
-        };
-
-        const updateBacteria = (bacteria, immuneCells) => {
-            const occupiedPositions = new Set([...immuneCells, ...bacteria].map(c => `${c.x},${c.y}`));
-            let newBacteria = bacteria.map(b => {
-                let newDir = immuneCells.some(cell =>
-                    Math.abs(cell.x - b.x) <= 2 &&
-                    Math.abs(cell.y - b.y) <= 2
-                ) ? getAwayFromImmuneCells(b, immuneCells) : randomDir();
-
-                let newPos = moveCell(b, newDir, gridSize);
-                while (occupiedPositions.has(`${newPos.x},${newPos.y}`)) {
-                    newDir = randomDir();
-                    newPos = moveCell(b, newDir, gridSize);
-                }
-                occupiedPositions.delete(`${b.x},${b.y}`);
-                occupiedPositions.add(`${newPos.x},${newPos.y}`);
+            let newPos = moveCell(b, dir, gridSize);
+            let attempts = 0;
+            while ((currentImmunePositions.has(`${newPos.x},${newPos.y}`) || newBacteriaPositions.has(`${newPos.x},${newPos.y}`)) && attempts < 4) {
+                dir = randomDir();
+                newPos = moveCell(b, dir, gridSize);
+                attempts++;
+            }
+            if (!currentImmunePositions.has(`${newPos.x},${newPos.y}`) && !newBacteriaPositions.has(`${newPos.x},${newPos.y}`)) {
+                newBacteriaPositions.add(`${newPos.x},${newPos.y}`);
                 return { ...b, x: newPos.x, y: newPos.y };
-            });
+            }
+            return b;
+        });
 
-            const nearbyBacteria = (b) => newBacteria.filter(other =>
-                Math.abs(other.x - b.x) <= 1 && Math.abs(other.y - b.y) <= 1
-            ).length;
+        // Move immune cells based on new bacteria positions
+        const newImmunePositions = new Set();
+        const newImmuneCells = immuneCells.map(cell => {
+            let target = null;
+            if (cell.type === 'macrophage') {
+                // Prioritize adjacent bacteria
+                const adjacentBacteria = newBacteria.filter(b => isAdjacent(cell, b, gridSize));
+                if (adjacentBacteria.length > 0) {
+                    target = adjacentBacteria[0]; // Move to first adjacent bacterium
+                } else {
+                    const markedBacteria = newBacteria.filter(b => b.marked);
+                    if (markedBacteria.length > 0) {
+                        target = findNearest(cell, markedBacteria, gridSize);
+                    } else if (newBacteria.length > 0) {
+                        target = findNearest(cell, newBacteria, gridSize);
+                    }
+                }
+            } else if (cell.type === 'tcell') {
+                const infectedTissues = [];
+                for (let y = 0; y < gridSize.height; y++) {
+                    for (let x = 0; x < gridSize.width; x++) {
+                        if (grid[y][x] === '#FF69B4') {
+                            infectedTissues.push({x, y});
+                        }
+                    }
+                }
+                if (infectedTissues.length > 0) {
+                    target = findNearest(cell, infectedTissues, gridSize);
+                }
+            } else if (cell.type === 'bcell') {
+                if (newBacteria.length > 0) {
+                    target = findNearest(cell, newBacteria, gridSize);
+                }
+            }
+            let dir = target ? getDirectionTo(cell, target, gridSize) : randomDir();
+            let newPos = moveCell(cell, dir, gridSize);
+            let attempts = 0;
+            while (newImmunePositions.has(`${newPos.x},${newPos.y}`) && attempts < 4) {
+                dir = randomDir();
+                newPos = moveCell(cell, dir, gridSize);
+                attempts++;
+            }
+            if (!newImmunePositions.has(`${newPos.x},${newPos.y}`)) {
+                newImmunePositions.add(`${newPos.x},${newPos.y}`);
+                return { ...cell, x: newPos.x, y: newPos.y, dir };
+            }
+            return cell;
+        });
 
-            const dividingBacteria = newBacteria.filter(b =>
-                !b.marked &&
-                Math.random() < (nearbyBacteria(b) > 2 ? 0.08 : 0.05) &&
-                [-1, 0, 1].some(dy =>
-                    [-1, 0, 1].some(dx =>
-                        grid[(b.y + dy + gridSize.height) % gridSize.height][(b.x + dx + gridSize.width) % gridSize.width] === '#FF69B4'
-                    )
-                )
-            );
+        // Perform actions based on new positions
+        let finalBacteria = [...newBacteria];
 
-            dividingBacteria.forEach(b => {
-                let newPos = moveCell(b, randomDir(), gridSize);
-                if (!occupiedPositions.has(`${newPos.x},${newPos.y}`)) {
-                    newBacteria.push({
+        // Macrophages eat bacteria on same or adjacent cells
+        newImmuneCells.forEach(cell => {
+            if (cell.type === 'macrophage') {
+                const adjacentPositions = getAdjacentPositions(cell, gridSize);
+                const positionsToCheck = [`${cell.x},${cell.y}`, ...adjacentPositions.map(pos => `${pos.x},${pos.y}`)];
+                finalBacteria = finalBacteria.filter(b => !positionsToCheck.includes(`${b.x},${b.y}`));
+            }
+        });
+
+        // T-cells heal infected tissues
+        newImmuneCells.forEach(cell => {
+            if (cell.type === 'tcell' && newGrid[cell.y][cell.x] === '#FF69B4') {
+                newGrid[cell.y][cell.x] = '#E0E0E0';
+            }
+        });
+
+        // B-cells mark bacteria within range
+        newImmuneCells.forEach(cell => {
+            if (cell.type === 'bcell') {
+                const range = 3;
+                finalBacteria.forEach(b => {
+                    const dx = Math.min(Math.abs(b.x - cell.x), gridSize.width - Math.abs(b.x - cell.x));
+                    const dy = Math.min(Math.abs(b.y - cell.y), gridSize.height - Math.abs(b.y - cell.y));
+                    if (dx <= range && dy <= range) {
+                        b.marked = true;
+                    }
+                });
+            }
+        });
+
+        // Bacteria infect healthy tissues
+        finalBacteria.forEach(b => {
+            if (newGrid[b.y][b.x] === '#E0E0E0') {
+                newGrid[b.y][b.x] = '#FF69B4';
+            }
+        });
+
+        // Bacteria multiplication
+        const newBacteriaToAdd = [];
+        finalBacteria.forEach(b => {
+            if (newGrid[b.y][b.x] === '#FF69B4' && !isImmuneCellNearby(b, newImmuneCells, 2, gridSize) && Math.random() < 0.05) {
+                const adjacent = getAdjacentPositions(b, gridSize);
+                const emptyAdjacent = adjacent.filter(pos => !newImmunePositions.has(`${pos.x},${pos.y}`) && !newBacteriaPositions.has(`${pos.x},${pos.y}`));
+                if (emptyAdjacent.length > 0) {
+                    const spawnPos = emptyAdjacent[Math.floor(Math.random() * emptyAdjacent.length)];
+                    newBacteriaToAdd.push({
                         id: Math.random().toString(36).substr(2, 9),
-                        x: newPos.x,
-                        y: newPos.y,
+                        x: spawnPos.x,
+                        y: spawnPos.y,
                         color: '#800080',
                         marked: false
                     });
-                    occupiedPositions.add(`${newPos.x},${newPos.y}`);
                 }
-            });
-
-            if (Math.random() < 0.02) {
-                const newBact = spawnBacteria(gridSize);
-                if (!occupiedPositions.has(`${newBact.x},${newBact.y}`)) newBacteria.push(newBact);
             }
-            return newBacteria;
-        };
+        });
 
-        setGrid(prevGrid => updateTissue(prevGrid));
-        setImmuneCells(prevCells => updateImmuneCells(prevCells, grid, bacteria));
-        setBacteria(prevBacteria => updateBacteria(prevBacteria, immuneCells));
-    }, [grid, bacteria, immuneCells, gridSize]);
+        finalBacteria = [...finalBacteria, ...newBacteriaToAdd];
+
+        // Dynamically add macrophages when bacteria exceed threshold
+        const bacteriaThreshold = 5;
+        const maxImmuneCells = 15;
+        if (finalBacteria.length > bacteriaThreshold && newImmuneCells.length < maxImmuneCells) {
+            const excessBacteria = finalBacteria.length - bacteriaThreshold;
+            const spawnChance = Math.min(0.05 * excessBacteria, 0.5); // 5% per extra bacterium, max 50%
+            if (Math.random() < spawnChance) {
+                const newCell = { id: Math.random().toString(36).substr(2, 9), type: 'macrophage', color: '#FF4500', dir: randomDir() };
+                let attempts = 0;
+                while (attempts < 100) {
+                    const x = Math.floor(Math.random() * gridSize.width);
+                    const y = Math.floor(Math.random() * gridSize.height);
+                    const posKey = `${x},${y}`;
+                    if (!newImmunePositions.has(posKey) && !newBacteriaPositions.has(posKey)) {
+                        newCell.x = x;
+                        newCell.y = y;
+                        newImmuneCells.push(newCell);
+                        newImmunePositions.add(posKey);
+                        break;
+                    }
+                    attempts++;
+                }
+            }
+        }
+
+        // Randomly spawn new bacteria with 2% chance
+        if (Math.random() < 0.02) {
+            const newBact = spawnBacteria(gridSize);
+            const posKey = `${newBact.x},${newBact.y}`;
+            if (!newImmunePositions.has(posKey) && !newBacteriaPositions.has(posKey)) {
+                finalBacteria.push(newBact);
+            }
+        }
+
+        setGrid(newGrid);
+        setImmuneCells(newImmuneCells);
+        setBacteria(finalBacteria);
+    }, [grid, immuneCells, bacteria, gridSize]);
 
     useEffect(() => {
         if (running) {
-            intervalRef.current = setInterval(() => {
-                updateSimulation();
-            }, 100);
+            intervalRef.current = setInterval(updateSimulation, 100);
         }
         return () => clearInterval(intervalRef.current);
     }, [running, updateSimulation]);
 
     const addBacteria = () => {
         const occupiedPositions = new Set([...immuneCells, ...bacteria].map(c => `${c.x},${c.y}`));
-        const newBact = spawnBacteria(gridSize);
-        if (!occupiedPositions.has(`${newBact.x},${newBact.y}`)) {
+        let attempts = 0;
+        let newBact;
+        do {
+            newBact = spawnBacteria(gridSize);
+            attempts++;
+        } while (occupiedPositions.has(`${newBact.x},${newBact.y}`) && attempts < 100);
+        if (attempts < 100) {
             setBacteria(prev => [...prev, newBact]);
         }
     };
 
     return (
         <div className="app">
-            <h1>Immune System Sim</h1>
-            <GridCanvas grid={grid} cells={[...immuneCells, ...bacteria]} size={gridSize} />
-            <ImmuneControls
-                running={running}
-                setRunning={setRunning}
-                reset={() => { setGrid(initializeGrid(gridSize)); setImmuneCells(initializeImmuneCells()); setBacteria([]); }}
-                addCell={spawnImmuneCell}
-                addBacteria={addBacteria}
-                cellCount={immuneCells.length}
-                bacteriaCount={bacteria.length}
-                bacteria={bacteria}
-            />
+            <div className="title-container">
+                <h1>Immune System Simulation</h1>
+                <p className="subtitle">
+                    Watch as immune cells defend against bacterial invasion in this interactive simulation.
+                    Observe how different types of immune cells work together to protect the organism.
+                </p>
+            </div>
+
+            <div className="simulation-container">
+                <div className="main-area">
+                    <div className="main-content">
+                        <div className="canvas-container">
+                            <GridCanvas
+                                grid={grid}
+                                immuneCells={immuneCells}
+                                bacteria={bacteria}
+                                gridSize={gridSize}
+                            />
+                        </div>
+                    </div>
+
+                    <div className="controls">
+                        <div className="control-buttons">
+                            <button onClick={() => setRunning(!running)}>
+                                {running ? '⏸ Pause' : '▶️ Start'}
+                            </button>
+                            <button onClick={addBacteria}>
+                                🦠 Add Bacteria
+                            </button>
+                            <button onClick={() => {
+                                const newCell = spawnImmuneCell(gridSize);
+                                const occupied = immuneCells.some(c => c.x === newCell.x && c.y === newCell.y) ||
+                                                 bacteria.some(b => b.x === newCell.x && b.y === newCell.y);
+                                if (!occupied) {
+                                    setImmuneCells(prev => [...prev, newCell]);
+                                }
+                            }}>
+                                🛡️ Add Immune Cell
+                            </button>
+                            <button onClick={() => {
+                                setGrid(initializeGrid(gridSize));
+                                setImmuneCells(initializeImmuneCells(gridSize));
+                                setBacteria([]);
+                                setRunning(false);
+                            }}>
+                                🔄 Reset
+                            </button>
+                        </div>
+
+                        <div className="stats">
+                            <p><span>🛡️</span> Immune Cells: <strong>{immuneCells.length}</strong></p>
+                            <p><span>🦠</span> Bacteria: <strong>{bacteria.length}</strong></p>
+                            <p><span>{running ? '⚡' : '⏸'}</span> Status: <strong>{running ? 'Active' : 'Paused'}</strong></p>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="side-content">
+                    <div className="legend">
+                        <h3>Cell Types & Behaviors</h3>
+                        <div className="legend-grid">
+                            <div className="legend-item">
+                                <div className="legend-emoji">🛡️</div>
+                                <div className="legend-info">
+                                    <strong>Macrophage</strong>
+                                    <span>Eats bacteria</span>
+                                </div>
+                            </div>
+                            <div className="legend-item">
+                                <div className="legend-emoji">⚔️</div>
+                                <div className="legend-info">
+                                    <strong>T-Cell</strong>
+                                    <span>Heals infected tissue</span>
+                                </div>
+                            </div>
+                            <div className="legend-item">
+                                <div className="legend-emoji">🎯</div>
+                                <div className="legend-info">
+                                    <strong>B-Cell</strong>
+                                    <span>Marks bacteria</span>
+                                </div>
+                            </div>
+                            <div className="legend-item">
+                                <div className="legend-emoji">🦠</div>
+                                <div className="legend-info">
+                                    <strong>Bacteria</strong>
+                                    <span>Infects healthy tissue</span>
+                                </div>
+                            </div>
+                            <div className="legend-item">
+                                <div className="legend-emoji">🫀</div>
+                                <div className="legend-info">
+                                    <strong>Healthy Tissue</strong>
+                                    <span>Normal body cells</span>
+                                </div>
+                            </div>
+                            <div className="legend-item">
+                                <div className="legend-emoji">🩸</div>
+                                <div className="legend-info">
+                                    <strong>Infected Tissue</strong>
+                                    <span>Tissue under bacterial attack</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div className="attribution">
+                Created with 💜 by <a href="https://lance.name" target="_blank" rel="noopener noreferrer">Lance</a>
+            </div>
         </div>
     );
 };
