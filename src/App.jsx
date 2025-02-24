@@ -9,18 +9,19 @@ const randomDir = () => ['up', 'down', 'left', 'right'][Math.floor(Math.random()
 const moveCell = (cell, dir, gridSize) => {
     const moves = { up: { x: 0, y: -1 }, down: { x: 0, y: 1 }, left: { x: -1, y: 0 }, right: { x: 1, y: 0 } };
     const move = moves[dir];
-    return {
-        x: (cell.x + move.x + gridSize.width) % gridSize.width,
-        y: (cell.y + move.y + gridSize.height) % gridSize.height
-    };
+    const newX = cell.x + move.x;
+    const newY = cell.y + move.y;
+    if (newX >= 0 && newX < gridSize.width && newY >= 0 && newY < gridSize.height) {
+        return { x: newX, y: newY };
+    } else {
+        return { x: cell.x, y: cell.y }; // Stay in place if move is out of bounds
+    }
 };
 
 const getDirectionTo = (from, to, gridSize) => {
     const dx = to.x - from.x;
     const dy = to.y - from.y;
-    const absDx = Math.min(Math.abs(dx), gridSize.width - Math.abs(dx));
-    const absDy = Math.min(Math.abs(dy), gridSize.height - Math.abs(dy));
-    if (absDx > absDy) {
+    if (Math.abs(dx) > Math.abs(dy)) {
         return dx > 0 ? 'right' : 'left';
     } else {
         return dy > 0 ? 'down' : 'up';
@@ -30,30 +31,32 @@ const getDirectionTo = (from, to, gridSize) => {
 const findNearest = (from, targets, gridSize) => {
     if (targets.length === 0) return null;
     return targets.reduce((near, target) => {
-        const distNear = Math.min(Math.abs(near.x - from.x), gridSize.width - Math.abs(near.x - from.x)) +
-                         Math.min(Math.abs(near.y - from.y), gridSize.height - Math.abs(near.y - from.y));
-        const distTarget = Math.min(Math.abs(target.x - from.x), gridSize.width - Math.abs(target.x - from.x)) +
-                           Math.min(Math.abs(target.y - from.y), gridSize.height - Math.abs(target.y - from.y));
+        const distNear = Math.abs(near.x - from.x) + Math.abs(near.y - from.y);
+        const distTarget = Math.abs(target.x - from.x) + Math.abs(target.y - from.y);
         return distTarget < distNear ? target : near;
     }, targets[0]);
 };
 
 const isImmuneCellNearby = (b, immuneCells, range, gridSize) => {
     return immuneCells.some(cell => {
-        const dx = Math.min(Math.abs(cell.x - b.x), gridSize.width - Math.abs(cell.x - b.x));
-        const dy = Math.min(Math.abs(cell.y - b.y), gridSize.height - Math.abs(cell.y - b.y));
+        const dx = Math.abs(cell.x - b.x);
+        const dy = Math.abs(cell.y - b.y);
         return dx + dy <= range;
     });
 };
 
 const getAdjacentPositions = (pos, gridSize) => {
-    const directions = ['up', 'down', 'left', 'right'];
-    return directions.map(dir => moveCell(pos, dir, gridSize));
+    const adjacent = [];
+    if (pos.y > 0) adjacent.push({ x: pos.x, y: pos.y - 1 }); // Up
+    if (pos.y < gridSize.height - 1) adjacent.push({ x: pos.x, y: pos.y + 1 }); // Down
+    if (pos.x > 0) adjacent.push({ x: pos.x - 1, y: pos.y }); // Left
+    if (pos.x < gridSize.width - 1) adjacent.push({ x: pos.x + 1, y: pos.y }); // Right
+    return adjacent;
 };
 
 const isAdjacent = (pos1, pos2, gridSize) => {
-    const dx = Math.min(Math.abs(pos1.x - pos2.x), gridSize.width - Math.abs(pos1.x - pos2.x));
-    const dy = Math.min(Math.abs(pos1.y - pos2.y), gridSize.height - Math.abs(pos1.y - pos2.y));
+    const dx = Math.abs(pos1.x - pos2.x);
+    const dy = Math.abs(pos1.y - pos2.y);
     return (dx === 1 && dy === 0) || (dx === 0 && dy === 1);
 };
 
@@ -125,7 +128,7 @@ const App = () => {
         const newBacteria = bacteria.map(b => {
             let dir;
             const nearestImmune = findNearest(b, immuneCells, gridSize);
-            const distToImmune = nearestImmune ? Math.min(Math.abs(nearestImmune.x - b.x), gridSize.width - Math.abs(nearestImmune.x - b.x)) + Math.min(Math.abs(nearestImmune.y - b.y), gridSize.height - Math.abs(nearestImmune.y - b.y)) : Infinity;
+            const distToImmune = nearestImmune ? Math.abs(nearestImmune.x - b.x) + Math.abs(nearestImmune.y - b.y) : Infinity;
             if (distToImmune <= 2) {
                 const dx = nearestImmune.x - b.x;
                 const dy = nearestImmune.y - b.y;
@@ -236,9 +239,9 @@ const App = () => {
             if (cell.type === 'bcell') {
                 const range = 3;
                 finalBacteria.forEach(b => {
-                    const dx = Math.min(Math.abs(b.x - cell.x), gridSize.width - Math.abs(b.x - cell.x));
-                    const dy = Math.min(Math.abs(b.y - cell.y), gridSize.height - Math.abs(b.y - cell.y));
-                    if (dx <= range && dy <= range) {
+                    const dx = Math.abs(b.x - cell.x);
+                    const dy = Math.abs(b.y - cell.y);
+                    if (dx + dy <= range) {
                         b.marked = true;
                     }
                 });
